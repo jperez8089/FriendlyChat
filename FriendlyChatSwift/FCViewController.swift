@@ -117,6 +117,9 @@ class FCViewController: UIViewController, UINavigationControllerDelegate {
     }
     
     func configureStorage() {
+       
+        storageRef = Storage.storage().reference()
+        
         // TODO: configure storage using your firebase storage
     }
     
@@ -155,7 +158,12 @@ class FCViewController: UIViewController, UINavigationControllerDelegate {
             backgroundBlur.effect = nil
             messageTextField.delegate = self
             
+            
             configureDatabase()
+            configureStorage()
+            configureRemoteConfig()
+            fetchConfig()
+            
             // TODO: Set up app to send and receive messages when signed in
         }
     }
@@ -176,6 +184,25 @@ class FCViewController: UIViewController, UINavigationControllerDelegate {
     }
     
     func sendPhotoMessage(photoData: Data) {
+        
+        let imagePath = "chat_photos/" + (Auth.auth().currentUser?.uid)! + "/\(Double(Date.timeIntervalSinceReferenceDate * 1000)).jpg"
+        
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        
+        //create child node at image path wiht photodata and meta data
+        
+        storageRef!.child(imagePath).putData(photoData, metadata: metadata) { (metadata, error) in
+            if let error = error {
+                print("error uploading: \(error)")
+                return
+            }
+            
+            
+            self.sendMessage(data: [Constants.MessageFields.imageUrl: self.storageRef!.child((metadata?.path)!).description])
+        }
+        
+        
         // TODO: create method that pushes message w/ photo to the firebase database
     }
     
@@ -260,10 +287,37 @@ extension FCViewController: UITableViewDelegate, UITableViewDataSource {
         let message = messageSnapshot.value as! [String:String]
         
         let name = message[Constants.MessageFields.name] ?? "[username]"
-        let text = message[Constants.MessageFields.text] ?? "[message]"
+    //if photo message, grab and dispay
         
-        cell!.textLabel?.text = name + ": " + text
-        cell!.imageView?.image = self.placeholderImage
+        if let imageURL = message[Constants.MessageFields.imageUrl] {
+            cell!.textLabel?.text = "sent by: \(name)"
+            
+            
+            //download and display image
+            
+            Storage.storage().reference(forURL: imageURL).getData(maxSize: INT64_MAX) {
+                (data, error)
+                
+                in
+                guard error == nil else {
+                    print("error downloading: \(error!)")
+                    return
+                }
+                
+                //display image
+                let messageImage = UIImage.init(data: data!, scale: 50)
+                
+                if cell == tableView.cellForRow(at: indexPath) {
+                    DispatchQueue.main.async {
+                        cell.imageView?.image = messageImage
+                        cell.setNeedsLayout()
+                    }
+                }
+            }
+        }
+        
+     
+        
         
         return cell!
         // TODO: update cell to display message data
@@ -274,8 +328,33 @@ extension FCViewController: UITableViewDelegate, UITableViewDataSource {
     }
     
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-            // TODO: if message contains an image, then display the image
+        
+        //skip if keyboard is show
+        
+        guard !messageTextField.isFirstResponder else { return }
+        // unpack message from firebase data snapshot
+        let messageSnapshot: DataSnapshot! = messages[(indexPath as NSIndexPath).row]
+        let message = messageSnapshot.value as! [String: String]
+        // if tapped row with image message, then display image
+        if let imageUrl = message[Constants.MessageFields.imageUrl] {
+            if let cachedImage = imageCache.object(forKey: imageUrl as NSString) {
+                showImageDisplay(cachedImage)
+            } else {
+                Storage.storage().reference(forURL: imageUrl).getData(maxSize: INT64_MAX){ (data, error) in
+                    guard error == nil else {
+                        print("Error downloading: \(error!)")
+                        return
+                    }
+                    self.showImageDisplay(UIImage.init(data: data!)!)
+                }
+            }
+        }
     }
+
+
+        
+            // TODO: if message contains an image, then display the image
+
     
     // MARK: Show Image Display
     
@@ -381,6 +460,8 @@ extension FCViewController: UITextFieldDelegate {
 // MARK: - FCViewController (Notifications)
 
 extension FCViewController {
+    
+    
     
     func subscribeToKeyboardNotifications() {
         subscribeToNotification(.UIKeyboardWillShow, selector: #selector(keyboardWillShow))
